@@ -1,0 +1,35 @@
+{
+  "name": "new",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "mint:duel": "node scripts/mint-duelpvp.mjs",
+    "mint:duel:dry": "node scripts/mint-duelpvp.mjs --dry-run",
+    "mint:zeros": "node scripts/mint-zeros.mjs",
+    "mint:zeros:dry": "node scripts/mint-zeros.mjs --dry-run",
+    "status:zeros": "node scripts/mint-zeros.mjs --status",
+    "mint:voidborn": "node scripts/mint-voidborn.mjs",
+    "mint:voidborn:dry": "node scripts/mint-voidborn.mjs --dry-run",
+    "status:voidborn": "node scripts/mint-voidborn.mjs --status",
+    "batch:voidborn": "node scripts/batch-runner.mjs --script voidborn",
+    "batch:voidborn:dry": "node scripts/batch-runner.mjs --script voidborn --dry-run",
+    "mint:prspct": "node scripts/mint-prspct.mjs",
+    "mint:prspct:buy": "node scripts/mint-prspct.mjs --buy",
+    "status:prspct": "node scripts/mint-prspct.mjs --status",
+    "batch:prspct": "node scripts/batch-runner.mjs --script prspct",
+    "batch:prspct:buy": "node scripts/batch-runner.mjs --script prspct --buy",
+    "batch:zeros": "node scripts/batch-runner.mjs --script zeros"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "chalk": "^6.0.0",
+    "ethers": "^5.8.0",
+    "https-proxy-agent": "^9.1.0",
+    "ws": "^8.21.3"
+  }
+}

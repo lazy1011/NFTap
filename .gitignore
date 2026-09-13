@@ -1,0 +1,7 @@
+wallet*.txt
+*keys*.txt
+unfunded*.txt
+unfunded*.json
+node_modules/
+*.tar.gz
+*.log
