@@ -16,8 +16,6 @@
 #include <atomic>
 #include <cuda_runtime.h>
 
-#define ROTL64(x, y) (((x) << (y)) | ((x) >> (64 - (y))))
-
 __constant__ uint64_t d_RC[24] = {
     0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL,
     0x8000000080008000ULL, 0x000000000000808bULL, 0x0000000080000001ULL,
@@ -41,11 +39,11 @@ __device__ __forceinline__ void keccak_f1600(uint64_t state[25]) {
         C[4] = state[4] ^ state[9] ^ state[14] ^ state[19] ^ state[24];
 
         uint64_t D[5];
-        D[0] = C[4] ^ ROTL64(C[1], 1);
-        D[1] = C[0] ^ ROTL64(C[2], 1);
-        D[2] = C[1] ^ ROTL64(C[3], 1);
-        D[3] = C[2] ^ ROTL64(C[4], 1);
-        D[4] = C[3] ^ ROTL64(C[0], 1);
+        D[0] = C[4] ^ ((C[1] << 1) | (C[1] >> 63));
+        D[1] = C[0] ^ ((C[2] << 1) | (C[2] >> 63));
+        D[2] = C[1] ^ ((C[3] << 1) | (C[3] >> 63));
+        D[3] = C[2] ^ ((C[4] << 1) | (C[4] >> 63));
+        D[4] = C[3] ^ ((C[0] << 1) | (C[0] >> 63));
 
         #pragma unroll
         for (int i = 0; i < 5; ++i) {
@@ -56,33 +54,33 @@ __device__ __forceinline__ void keccak_f1600(uint64_t state[25]) {
             state[i + 20] ^= D[i];
         }
 
-        // Rho and Pi
+        // Rho and Pi (unrolled mapping state -> B with exact offsets)
         uint64_t B[25];
         B[0]  = state[0];
-        B[10] = ROTL64(state[1], 1);
-        B[7]  = ROTL64(state[2], 62);
-        B[11] = ROTL64(state[3], 28);
-        B[17] = ROTL64(state[4], 27);
-        B[18] = ROTL64(state[5], 36);
-        B[3]  = ROTL64(state[6], 44);
-        B[5]  = ROTL64(state[7], 6);
-        B[16] = ROTL64(state[8], 55);
-        B[8]  = ROTL64(state[9], 20);
-        B[21] = ROTL64(state[10], 3);
-        B[24] = ROTL64(state[11], 10);
-        B[4]  = ROTL64(state[12], 43);
-        B[15] = ROTL64(state[13], 25);
-        B[23] = ROTL64(state[14], 39);
-        B[19] = ROTL64(state[15], 41);
-        B[9]  = ROTL64(state[16], 45);
-        B[2]  = ROTL64(state[17], 15);
-        B[20] = ROTL64(state[18], 21);
-        B[14] = ROTL64(state[19], 8);
-        B[22] = ROTL64(state[20], 18);
-        B[1]  = ROTL64(state[21], 2);
-        B[6]  = ROTL64(state[22], 61);
-        B[12] = ROTL64(state[23], 56);
-        B[13] = ROTL64(state[24], 14);
+        B[10] = ((state[1] << 1)   | (state[1] >> 63));
+        B[20] = ((state[2] << 62)  | (state[2] >> 2));
+        B[5]  = ((state[3] << 28)  | (state[3] >> 36));
+        B[15] = ((state[4] << 27)  | (state[4] >> 37));
+        B[16] = ((state[5] << 36)  | (state[5] >> 28));
+        B[1]  = ((state[6] << 44)  | (state[6] >> 20));
+        B[11] = ((state[7] << 6)   | (state[7] >> 58));
+        B[21] = ((state[8] << 55)  | (state[8] >> 9));
+        B[6]  = ((state[9] << 20)  | (state[9] >> 44));
+        B[7]  = ((state[10] << 3)  | (state[10] >> 61));
+        B[17] = ((state[11] << 10) | (state[11] >> 54));
+        B[2]  = ((state[12] << 43) | (state[12] >> 21));
+        B[12] = ((state[13] << 25) | (state[13] >> 39));
+        B[22] = ((state[14] << 39) | (state[14] >> 25));
+        B[23] = ((state[15] << 41) | (state[15] >> 23));
+        B[8]  = ((state[16] << 45) | (state[16] >> 19));
+        B[18] = ((state[17] << 15) | (state[17] >> 49));
+        B[3]  = ((state[18] << 21) | (state[18] >> 43));
+        B[13] = ((state[19] << 8)  | (state[19] >> 56));
+        B[14] = ((state[20] << 18) | (state[20] >> 46));
+        B[24] = ((state[21] << 2)  | (state[21] >> 62));
+        B[9]  = ((state[22] << 61) | (state[22] >> 3));
+        B[19] = ((state[23] << 56) | (state[23] >> 8));
+        B[4]  = ((state[24] << 14) | (state[24] >> 50));
 
         // Chi
         #pragma unroll
@@ -99,12 +97,14 @@ __device__ __forceinline__ void keccak_f1600(uint64_t state[25]) {
     }
 }
 
+__device__ __forceinline__ uint32_t dev_bswap32(uint32_t x) {
+    return __byte_perm(x, 0, 0x0123);
+}
+
 __device__ __forceinline__ uint64_t dev_bswap64(uint64_t x) {
     uint32_t lo = (uint32_t)x;
     uint32_t hi = (uint32_t)(x >> 32);
-    uint32_t lo_be = __byte_perm(lo, 0, 0x0123);
-    uint32_t hi_be = __byte_perm(hi, 0, 0x0123);
-    return ((uint64_t)lo_be << 32) | (uint64_t)hi_be;
+    return ((uint64_t)dev_bswap32(lo) << 32) | dev_bswap32(hi);
 }
 
 __global__ void mine_kernel(
@@ -129,8 +129,8 @@ __global__ void mine_kernel(
     uint32_t hi32 = (uint32_t)(nonce >> 32);
     uint32_t lo32 = (uint32_t)(nonce & 0xffffffffULL);
 
-    uint32_t hi_be = __byte_perm(hi32, 0, 0x0123);
-    uint32_t lo_be = __byte_perm(lo32, 0, 0x0123);
+    uint32_t hi_be = dev_bswap32(hi32);
+    uint32_t lo_be = dev_bswap32(lo32);
 
     // Lane 9: bytes 72..79 (hi 32 bits of nonce at 76..79)
     state[9] = ((uint64_t)hi_be << 32);
