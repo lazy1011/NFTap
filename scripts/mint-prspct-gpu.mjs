@@ -79,19 +79,35 @@ function buildCudaMinerIfNeeded() {
   return binPath;
 }
 
-function runGpuMiner({ binPath, seed, sender, target }) {
+function runGpuMiner({ binPath, seed, sender, target, contract, depth }) {
   return new Promise((resolve, reject) => {
     const startNonce = String(Math.floor(Math.random() * 2 ** 45) + 1);
     const args = [seed, sender, target, startNonce];
 
     const child = spawn(binPath, args, { stdio: ['ignore', 'pipe', 'inherit'] });
     let stdoutData = '';
+    let killedByStale = false;
+
+    // Background watcher to detect when other network miners advance depth / seed
+    const interval = setInterval(async () => {
+      try {
+        const latestState = await contract.state();
+        if (latestState.depth.toNumber() !== depth || latestState.seed.toLowerCase() !== seed.toLowerCase()) {
+          killedByStale = true;
+          clearInterval(interval);
+          child.kill('SIGTERM');
+          resolve({ stale: true, newDepth: latestState.depth.toNumber() });
+        }
+      } catch (_) {}
+    }, 2500);
 
     child.stdout.on('data', (data) => {
       stdoutData += data.toString();
     });
 
     child.on('close', (code) => {
+      clearInterval(interval);
+      if (killedByStale) return;
       if (code !== 0) {
         return reject(new Error(`GPU Miner exited with code ${code}`));
       }
@@ -107,7 +123,10 @@ function runGpuMiner({ binPath, seed, sender, target }) {
       }
     });
 
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => {
+      clearInterval(interval);
+      reject(err);
+    });
   });
 }
 
@@ -163,76 +182,88 @@ async function main() {
     for (let m = 0; m < args.perWallet; m++) {
       const iterTag = args.perWallet > 1 ? ` (Share ${m + 1}/${args.perWallet})` : '';
 
-    // Check balance
-    const balance = await provider.getBalance(w.address);
-    if (balance.lt(ethers.utils.parseEther('0.000005'))) {
-      console.log(`${logPrefix} ${chalk.yellow(`Skipped (balance ${ethers.utils.formatEther(balance)} ETH too low for gas)`)}`);
-      continue;
-    }
+      while (true) {
+        // Check balance
+        const balance = await provider.getBalance(w.address);
+        if (balance.lt(ethers.utils.parseEther('0.000005'))) {
+          console.log(`${logPrefix} ${chalk.yellow(`Skipped (balance ${ethers.utils.formatEther(balance)} ETH too low for gas)`)}`);
+          break;
+        }
 
-    // Read current contract state
-    const state = await contract.state();
-    const depth = state.depth.toNumber();
-    if (depth >= CONFIG.maxSupply) {
-      console.log(chalk.bold.red('\nPRSPCT completely sold out! (8,888 / 8,888 shares dug). Stopping.'));
-      break;
-    }
+        // Read current contract state
+        const state = await contract.state();
+        const depth = state.depth.toNumber();
+        if (depth >= CONFIG.maxSupply) {
+          console.log(chalk.bold.red('\nPRSPCT completely sold out! (8,888 / 8,888 shares dug). Stopping.'));
+          return;
+        }
 
-    const seed = state.seed;
-    const targetHex = ethers.utils.hexZeroPad(state.target.toHexString(), 32);
+        const seed = state.seed;
+        const targetHex = ethers.utils.hexZeroPad(state.target.toHexString(), 32);
 
-    console.log(`${logPrefix} Mining share at depth #${depth + 1} with RTX 4090 GPU...`);
+        console.log(`${logPrefix} Mining share at depth #${depth + 1} with RTX 4090 GPU...`);
 
-    const startTime = Date.now();
-    let solution;
-    try {
-      solution = await runGpuMiner({
-        binPath,
-        seed,
-        sender: w.address,
-        target: targetHex,
-      });
-    } catch (err) {
-      console.log(`${logPrefix} ${chalk.red(`Mining error: ${err.message}`)}`);
-      continue;
-    }
+        const startTime = Date.now();
+        let solution;
+        try {
+          solution = await runGpuMiner({
+            binPath,
+            seed,
+            sender: w.address,
+            target: targetHex,
+            contract,
+            depth,
+          });
+        } catch (err) {
+          console.log(`${logPrefix} ${chalk.red(`Mining error: ${err.message}`)}`);
+          break;
+        }
 
-    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-    console.log(
-      `${logPrefix} ${chalk.bold.green('✓ Winning Nonce Found on GPU!')} ` +
-      `Nonce: ${chalk.yellow(solution.nonce)} | ` +
-      `Hash: ${chalk.gray(solution.hash.slice(0, 18))}… (${elapsedSec}s)`
-    );
+        if (solution.stale) {
+          console.log(`\n${logPrefix} ${chalk.yellow(`⚡ Network advanced to depth #${solution.newDepth}! Updated seed and restarting GPU...`)}`);
+          continue;
+        }
 
-    // Broadcast on-chain
-    console.log(`${logPrefix} Broadcasting free claim transaction on Robinhood Chain...`);
-    try {
-      const signer = new ethers.Wallet(w.privateKey, provider);
-      const calldata = contractInterface.encodeFunctionData('claim', [solution.nonce]);
+        const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(
+          `${logPrefix} ${chalk.bold.green('✓ Winning Nonce Found on GPU!')} ` +
+          `Nonce: ${chalk.yellow(solution.nonce)} | ` +
+          `Hash: ${chalk.gray(solution.hash.slice(0, 18))}… (${elapsedSec}s)`
+        );
 
-      const gasPrice = await provider.getGasPrice();
-      const finalGasPrice = gasPrice.gt(0) ? gasPrice.mul(120).div(100) : ethers.BigNumber.from('10000000');
+        // Broadcast on-chain
+        console.log(`${logPrefix} Broadcasting free claim transaction on Robinhood Chain...`);
+        try {
+          const signer = new ethers.Wallet(w.privateKey, provider);
+          const calldata = contractInterface.encodeFunctionData('claim', [solution.nonce]);
 
-      const tx = await signer.sendTransaction({
-        to: CONFIG.contractAddress,
-        data: calldata,
-        value: 0,
-        gasLimit: CONFIG.gasLimit,
-        gasPrice: finalGasPrice,
-      });
+          const gasPrice = await provider.getGasPrice();
+          const finalGasPrice = gasPrice.gt(0) ? gasPrice.mul(120).div(100) : ethers.BigNumber.from('10000000');
 
-      console.log(`${logPrefix} Tx sent: ${chalk.gray(tx.hash.slice(0, 16))}… waiting for confirmation`);
-      const receipt = await tx.wait(1);
+          const tx = await signer.sendTransaction({
+            to: CONFIG.contractAddress,
+            data: calldata,
+            value: 0,
+            gasLimit: CONFIG.gasLimit,
+            gasPrice: finalGasPrice,
+          });
 
-      if (receipt.status === 1) {
-        totalMints++;
-        console.log(`${logPrefix} ${chalk.bold.green('🎉 SUCCESS! Share minted on-chain!')} (Block: ${receipt.blockNumber}, Gas: ${receipt.gasUsed.toString()})`);
-        console.log(`     ${CONFIG.explorerUrl}/tx/${tx.hash}\n`);
-      } else {
-        console.log(`${logPrefix} ${chalk.red('✗ Transaction reverted on-chain.\n')}`);
-      }
-      } catch (err) {
-        console.log(`${logPrefix} ${chalk.red(`Broadcast error: ${err.message}\n`)}`);
+          console.log(`${logPrefix} Tx sent: ${chalk.gray(tx.hash.slice(0, 16))}… waiting for confirmation`);
+          const receipt = await tx.wait(1);
+
+          if (receipt.status === 1) {
+            totalMints++;
+            console.log(`${logPrefix} ${chalk.bold.green('🎉 SUCCESS! Share minted on-chain!')} (Block: ${receipt.blockNumber}, Gas: ${receipt.gasUsed.toString()})`);
+            console.log(`     ${CONFIG.explorerUrl}/tx/${tx.hash}\n`);
+            break;
+          } else {
+            console.log(`${logPrefix} ${chalk.red('✗ Transaction reverted on-chain.\n')}`);
+            break;
+          }
+        } catch (err) {
+          console.log(`${logPrefix} ${chalk.red(`Broadcast error: ${err.message}\n`)}`);
+          break;
+        }
       }
     }
   }

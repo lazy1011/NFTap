@@ -30,6 +30,7 @@ fi
 echo "CUDA Version: $(nvcc --version | grep release)"
 
 echo "[4/4] Compiling Multi-GPU PRSPCT CUDA Miner for RTX 4090s..."
+rm -f scripts/prspct_cuda_miner
 nvcc -O3 -std=c++17 -arch=sm_89 scripts/prspct_cuda_miner.cu -o scripts/prspct_cuda_miner -lpthread || nvcc -O3 -std=c++17 scripts/prspct_cuda_miner.cu -o scripts/prspct_cuda_miner -lpthread
 
 echo "================================================================================"
