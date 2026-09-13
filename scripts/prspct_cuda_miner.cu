@@ -99,6 +99,14 @@ __device__ __forceinline__ void keccak_f1600(uint64_t state[25]) {
     }
 }
 
+__device__ __forceinline__ uint64_t dev_bswap64(uint64_t x) {
+    uint32_t lo = (uint32_t)x;
+    uint32_t hi = (uint32_t)(x >> 32);
+    uint32_t lo_be = __byte_perm(lo, 0, 0x0123);
+    uint32_t hi_be = __byte_perm(hi, 0, 0x0123);
+    return ((uint64_t)lo_be << 32) | (uint64_t)hi_be;
+}
+
 __global__ void mine_kernel(
     const uint64_t* __restrict__ base_state,
     uint64_t target_w0, uint64_t target_w1, uint64_t target_w2, uint64_t target_w3,
@@ -136,10 +144,10 @@ __global__ void mine_kernel(
     keccak_f1600(state);
 
     // Compare first 32 bytes (big endian) against target
-    uint64_t h0 = __builtin_bswap64(state[0]);
-    uint64_t h1 = __builtin_bswap64(state[1]);
-    uint64_t h2 = __builtin_bswap64(state[2]);
-    uint64_t h3 = __builtin_bswap64(state[3]);
+    uint64_t h0 = dev_bswap64(state[0]);
+    uint64_t h1 = dev_bswap64(state[1]);
+    uint64_t h2 = dev_bswap64(state[2]);
+    uint64_t h3 = dev_bswap64(state[3]);
 
     bool valid = false;
     if (h0 < target_w0) valid = true;
